@@ -3,7 +3,7 @@
 #$1 : Project (Chart, Lang, etc)
 #$2 : variant number
 #$3 : mujava++ properties file
-#$4 : -MC (for variant modified class) or fully qualified name of the class to analyze
+#$4 : -MC (for variant modified class) or fully qualified name of the class to analyze (to use several classes separated by :)
 #$5 : -MJ or mutants folder with the following structure : rootFolder/foldersForEachMutant/fully qualified path ending with a single java file
 #$6 : external jars folder (to be used by defects4j and mujava); - to specify no external jar folder
 #$7 : external classpath (relative to checkout dir, separated by :); - to specify no external classpath
@@ -290,6 +290,7 @@ modifiedClassesFound=0
 modifiedClasses=""
 
 singleClassToRun=""
+callMJwithAllClasses=0
 if [[ "$classOption" == "-MC" ]]; then
 	while read -r line ; do
 		echo "Processing $line"
@@ -316,8 +317,25 @@ if [[ "$classOption" == "-MC" ]]; then
 		fi
 	done < <(echo "$info")
 else
-	modifiedClasses="$classOption"
-	singleClassToRun="$classOption"
+	callMJwithAllClasses=1
+	modifiedClasses=""
+	oldIFS=$IFS
+	IFS=':'
+	a=($classOption)
+	for i in ${a[*]}
+	do
+		echo $i
+		if [[ -z "${modifiedClasses// }" ]]; then
+			modifiedClasses=$i
+			singleClassToRun=$i
+		else
+			modifiedClasses=$modifiedClasses" "$i
+		fi
+	done
+	IFS=$oldIFS
+	echo $modifiedClasses
+	#modifiedClasses="$classOption"
+	#singleClassToRun="$classOption"
 fi
 
 echo "Clasess to mutate: "$modifiedClasses
@@ -343,32 +361,43 @@ else
 	echo "you must use a template with the option mutation.basic.useExternalMutants set as true"
 fi
 
-declare -a a="(${modifiedClasses/,/ })";
-for i in ${a[*]}
-do 
-	echo "Methods for class $i"
-	methods=""
-	pushd $binDir 							#ENTERED BINDIR
-	pwd
-	while read -r line ; do
-		if [[ -z "${methods// }" ]]; then
-			methods=$line
-		else
-			methods=$methods" "$line
-		fi
-	done < <(echo $(javap $i | grep -o "[a-zA-Z0-9]*(".*")" | sed 's/(.*)//g' | grep -o "^[a-z].*"))
-	popd 									#EXITED BINDIR (should be in initial directory)
-	pwd
-	newPropertiesFile="$i""-""${propertiesFile/template-/}"
+if [[ "$callMJwithAllClasses" -eq "0" ]]; then
+	declare -a a="(${modifiedClasses/,/ })";
+	for i in ${a[*]}
+	do 
+		echo "Methods for class $i"
+		methods=""
+		pushd $binDir 							#ENTERED BINDIR
+		pwd
+		while read -r line ; do
+			if [[ -z "${methods// }" ]]; then
+				methods=$line
+			else
+				methods=$methods" "$line
+			fi
+		done < <(echo $(javap $i | grep -o "[a-zA-Z0-9]*(".*")" | sed 's/(.*)//g' | grep -o "^[a-z].*"))
+		popd 									#EXITED BINDIR (should be in initial directory)
+		pwd
+		newPropertiesFile="$i""-""${propertiesFile/template-/}"
+		cp $propertiesFile $newPropertiesFile
+		sed -i "s|<MUTFOLDER>|$mutantsOrigin|g" $newPropertiesFile
+		sed -i "s|<SOURCEDIR>|$sourceDir|g" $newPropertiesFile
+		sed -i "s|<BINDIR>|$binDir|g" $newPropertiesFile
+		sed -i "s|<TESTSBINDIR>|$testBinDir|g" $newPropertiesFile
+		sed -i "s|<CLASSTOMUTATE>|$i|g" $newPropertiesFile
+		sed -i "s|<METHODS>|$methods|g" $newPropertiesFile
+		sed -i "s|<TESTS>|$tests|g" $newPropertiesFile
+	done
+else
+	newPropertiesFile="several-""${propertiesFile/template-/}"
 	cp $propertiesFile $newPropertiesFile
 	sed -i "s|<MUTFOLDER>|$mutantsOrigin|g" $newPropertiesFile
 	sed -i "s|<SOURCEDIR>|$sourceDir|g" $newPropertiesFile
 	sed -i "s|<BINDIR>|$binDir|g" $newPropertiesFile
 	sed -i "s|<TESTSBINDIR>|$testBinDir|g" $newPropertiesFile
-	sed -i "s|<CLASSTOMUTATE>|$i|g" $newPropertiesFile
-	sed -i "s|<METHODS>|$methods|g" $newPropertiesFile
+	sed -i "s|<CLASSTOMUTATE>|$modifiedClasses|g" $newPropertiesFile
 	sed -i "s|<TESTS>|$tests|g" $newPropertiesFile
-done
+fi
 
 externalClasspath=""
 if [[ ! "$externalCP" == "-" ]]; then
