@@ -6,8 +6,9 @@
 #$4 : -MC (for variant modified class) or fully qualified name of the class to analyze
 #$5 : -MJ or mutants folder with the following structure : rootFolder/foldersForEachMutant/fully qualified path ending with a single java file
 #$6 : external jars folder (to be used by defects4j and mujava); - to specify no external jar folder
-#$7 : -A (to use all tests), -T (to use triggering tests), and -Z (to used zipped tests as java files)
-#$8(only with -Z) : bz2 or gz test suite file location
+#$7 : external classpath (relative to checkout dir, separated by :); - to specify no external classpath
+#$8 : -A (to use all tests), -T (to use triggering tests), and -Z (to used zipped tests as java files)
+#$9(only with -Z) : bz2 or gz test suite file location
 
 # This will run muJava++ usigin a template properties file
 # The properties file will be modified to define which classes to mutate and which tests to use.
@@ -48,7 +49,8 @@ propertiesFile="$3"
 classOption="$4"
 mutantsOrigin="$5"
 externalJarFolder="$6"
-triggeringTests="$7"
+externalCP="$7"
+triggeringTests="$8"
 
 info=$(defects4j info -p $project -b $variant)
 exitCode="$?"
@@ -214,7 +216,7 @@ elif [[ "$triggeringTests" == "-A" ]]; then
 elif [[ "$triggeringTests" == "-Z" ]]; then
 	#unzip and copy tests to defects4j test source folder
 	#this option will work as calling with -A but will change the original with the provided tests
-	zipPath="$8"	
+	zipPath="$9"	
 	root="${zipPath#.}";root="${zipPath%"$root"}${root%.*}"
 	ext="${zipPath#"$root"}"
 	tarOptions=""	
@@ -368,9 +370,25 @@ do
 	sed -i "s|<TESTS>|$tests|g" $newPropertiesFile
 done
 
+externalClasspath=""
+if [[ ! "$externalCP" == "-" ]]; then
+	externalClasspath=""
+	oldIFS=$IFS
+	IFS=':'
+	a=($externalCP)
+	#declare -a a="(${externalCP/:/ })";
+	for i in ${a[*]}
+	do
+		echo $i
+		externalClasspath=$externalClasspath":"$checkoutDir"/"$i
+		echo $externalClasspath	
+	done
+	IFS=$oldIFS
+fi
+
 echo "Running mujava with properties file: $newPropertiesFile"
 #echo "java -cp $MUJAVA_LIBS:$MUJAVA_JAR mujava.app.Main $newPropertiesFile"
-mujavaClasspath=$MUJAVA_LIBS:$MUJAVA_JAR:$binDir:$testBinDir:$projectLibDir
+mujavaClasspath=$MUJAVA_LIBS:$MUJAVA_JAR:$binDir:$testBinDir:$projectLibDir$externalClasspath
 if [[ ! -z "${tests// }" ]]; then
 	mujavaClasspath=$mujavaClasspath:$projectJars
 fi
