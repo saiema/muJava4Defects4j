@@ -3,8 +3,11 @@
 #$1 : Project (Chart, Lang, etc)
 #$2 : variant number
 #$3 : mujava++ properties file
-#$4 : 0 or non-zero for using all tests or only triggering tests
-
+#$4 : -MC (for variant modified class) or fully qualified name of the class to analyze
+#$5 : -MJ or mutants folder with the following structure : rootFolder/foldersForEachMutant/fully qualified path ending with a single java file
+#$6 : external jars folder (to be used by defects4j and mujava); - to specify no external jar folder
+#$7 : -A (to use all tests), -T (to use triggering tests), and -Z (to used zipped tests as java files)
+#$8(only with -Z) : bz2 or gz test suite file location
 
 # This will run muJava++ usigin a template properties file
 # The properties file will be modified to define which classes to mutate and which tests to use.
@@ -42,7 +45,10 @@ echo "MUJAVA LIBS: $MUJAVA_LIBS"
 project="$1"
 variant="$2"
 propertiesFile="$3"
-triggeringTests="$4"
+classOption="$4"
+mutantsOrigin="$5"
+externalJarFolder="$6"
+triggeringTests="$7"
 
 info=$(defects4j info -p $project -b $variant)
 exitCode="$?"
@@ -100,74 +106,69 @@ echo "Changing J2SDKDIR to $JAVA_HOME_TO_USE"
 export J2SDKDIR=$JAVA_HOME_TO_USE
 echo "New J2SDKDIR: $J2SDKDIR"
 
+triggeringTestsFound=0
+#Obtaining test source folder
+while read -r line ; do
+		#echo "Processing $line"
+		if [ "$line" == "Root cause in triggering tests:" ]; then
+		#	echo "triggering tests to follow"
+			triggeringTestsFound=1
+			continue
+		fi
+		if [ "$triggeringTestsFound" -eq "1" ]; then
+			isSeparatingLine "$line" isLine
+			if [ "$isLine" -eq "0" ]; then
+				if beginswith "- " "$line"; then		    	
+					cleanedLine="${line/- /}"
+					testAsPath=$(echo $cleanedLine | sed -r 's/::.*$//' | sed -r "s/\\./\\//g")".java"
+		#			echo "$testAsPath"
+					fullPathToTTest=$(find $checkoutDir -wholename "*$testAsPath")
+					testSrcDir="${fullPathToTTest/$testAsPath}"
+					echo $testSrcDir
+					break
+				else
+					continue			
+				fi
+			else
+				triggeringTestsFound=0
+		#		echo "Finishing processing triggering tests"
+				break
+			fi
+		fi
+	done < <(echo "$info")
+#===========================
 
-#echo "Breaking project"
-#rm $checkoutDir"/lib/servlet.jar"
-
-
-compile=$(defects4j compile)
-exitCode="$?"
-
-if [[ ! $exitCode == "0" ]]; then
-	"defects4j compile command failed"
-	exit 3;
-fi
-
-testCommand=$(defects4j 'test')
-exitCode="$?"
-
-if [[ ! $exitCode == "0" ]]; then
-	"defects4j test command failed"
-	exit 4;
-fi
-
-popd											#EXITED CHECKOUTDIR (should be in initial directory)
-pwd
 
 sourceDir=$checkoutDir"/source/"
 binDir=$checkoutDir"/build/"
 testBinDir=$checkoutDir"/build-tests/"
+testSrcDir=$testSrcDir
 projectLibDir=$checkoutDir"/lib"
-pushd $projectLibDir
+pushd $projectLibDir					#ENTERED Project lib dir
 projectJars=$(find . | awk '/\.jar/' | sed "s/\\.\\///g" | xargs -I {} echo $projectLibDir/{}":")
 projectJars="${projectJars::-1}"
 projectJars=$(tr -d "\n\r" < <(echo $projectJars))
 projectJars=$(echo $projectJars | sed "s/ //g")
-popd
+popd							#EXITED Project lib dir (should be in initial directory)
 
-modifiedClassesFound=0
-modifiedClasses=""
+externalJars=""
+if [[ ! "$externalJarFolder" == "-" ]]; then
+	pushd $externalJarFolder					#ENTERED external jar dir
+	find . | awk '/\.jar/' | sed "s/\\.\\///g" | xargs -I {} cp {} "$projectLibDir"
+	externalJars=$(find . | awk '/\.jar/' | sed "s/\\.\\///g" | xargs -I {} echo $externalJarFolder/{}":")
+	externalJars="${externalJars::-1}"
+	externalJars=$(tr -d "\n\r" < <(echo $externalJars))
+	externalJars=$(echo $externalJars | sed "s/ //g")
+	popd								#EXITED external jar dir (should be in initial directory)
+fi
+echo "external jars: $externalJars"
 
-
-while read -r line ; do
-	echo "Processing $line"
-	if [ "$line" == "List of modified sources:" ]; then
-  		echo "modified classes to follow"
-  		modifiedClassesFound=1
-		continue
-	fi
-	if [ "$modifiedClassesFound" -eq "1" ]; then
-		isSeparatingLine "$line" isLine
-		if [ "$isLine" -eq "0" ]; then
-			cleanedLine="${line/- /}"
-			if [[ -z "${modifiedClasses// }" ]]; then
-				modifiedClasses=$cleanedLine
-			else
-				modifiedClasses=$modifiedClasses","$cleanedLine
-			fi
-		else
-			modifiedClassesFound=0
-			echo "Finishing processing modified classes"
-			break
-		fi
-	fi
-done < <(echo "$info")
-
-echo "Clases to mutate: "$modifiedClasses
 
 triggeringTestsFound=0
 tests=""
-if [ "$triggeringTests" -ne "0" ]; then
+echo "$triggeringTests"
+singleTest=""
+if [[ "$triggeringTests" == "-T" ]]; then
 	while read -r line ; do
 		echo "Processing $line"
 		if [ "$line" == "Root cause in triggering tests:" ]; then
@@ -181,6 +182,7 @@ if [ "$triggeringTests" -ne "0" ]; then
 				if beginswith "- " "$line"; then		    	
 					cleanedLine="${line/- /}"
 					cleanedLine=$(echo $cleanedLine | sed -r 's/::.*$//')
+					singleTest=$cleanedLine
 					if [[ -z "${tests// }" ]]; then
 						tests=$cleanedLine
 					else
@@ -196,21 +198,148 @@ if [ "$triggeringTests" -ne "0" ]; then
 			fi
 		fi
 	done < <(echo "$info")
-else
-	pushd $testBinDir 							#ENTERED TESTSBINDIR
+elif [[ "$triggeringTests" == "-A" ]]; then
+	pushd $testSrcDir 							#ENTERED TESTSBINDIR
 	pwd	
 	while read -r line ; do
 		if [[ -z "${tests// }" ]]; then
 				tests=$line
+				singleTest=$line
 			else
 				tests=$tests" "$line
 			fi
-	done < <(find . | awk '/.*Tests\.class/' | sed "s/\\.\\///g" | sed "s/\\//\\./g" | sed "s/\\.class//g")
-	popd 										#EXITED TESTSBINDIR (should be in initial directory)
+	done < <(find . | awk '/.*Tests\.java/' | sed "s/\\.\\///g" | sed "s/\\//\\./g" | sed "s/\\.java//g")
+	popd 													
 	pwd
+elif [[ "$triggeringTests" == "-Z" ]]; then
+	#unzip and copy tests to defects4j test source folder
+	#this option will work as calling with -A but will change the original with the provided tests
+	zipPath="$8"	
+	root="${zipPath#.}";root="${zipPath%"$root"}${root%.*}"
+	ext="${zipPath#"$root"}"
+	tarOptions=""	
+	if [[ "$ext" == ".bz2" ]]; then
+		tarOptions="xvjf"
+	elif [[ "$ext" == ".gz" ]]; then
+		tarOptions="xvzf"
+	else
+		echo "Unsupported file format for test suites $ext"
+		exit 6
+	fi
+	rm -rf "${testSrcDir::-1}"
+	mkdir "${testSrcDir::-1}"
+	cp "$zipPath" "$testSrcDir"
+	pushd "$testSrcDir"						#ENTERED TESTSSRCDIR
+	pwd
+	tar "$tarOptions" "$zipPath"
+	zipFile=$(basename $zipPath)
+	rm -f "$testSrcDir$zipFile"
+	while read -r line ; do
+		if [[ -z "${tests// }" ]]; then
+				tests=$line
+				singleTest=$line
+			else
+				tests=$tests" "$line
+			fi
+	done < <(find . | awk '/.*\.java/' | sed "s/\\.\\///g" | sed "s/\\//\\./g" | sed "s/\\.java//g")
+	popd								#EXITED TESTSSRCDIR (should be in initial directory)
+	pwd
+else
+	echo "Unknown option $triggeringTests"
+	exit 5
 fi
 
 echo "Tests found : $tests"
+
+
+compile=$(defects4j compile)
+exitCode="$?"
+
+if [[ ! $exitCode == "0" ]]; then
+	echo "defects4j compile command failed"
+	exit 3;
+fi
+
+#SEARCH A COMPILED TEST
+echo $singleTest
+if [[ -z "${singleTest// }" ]]; then
+	echo "Contact your java black wizard!"
+	exit 7
+fi
+testAsPath=$(echo $singleTest | sed -r "s/\\./\\//g")".class"
+echo "$testAsPath"
+fullPathToSingleTest=$(find $checkoutDir -wholename "*$testAsPath")
+testBinDir="${fullPathToSingleTest/$testAsPath}"
+echo $testBinDir
+#======================
+
+#testCommand=$(defects4j 'test')
+#exitCode="$?"
+
+#if [[ ! $exitCode == "0" ]]; then
+#	echo "defects4j test command failed"
+#	exit 4;
+#fi
+
+popd											#EXITED CHECKOUTDIR (should be in initial directory)
+pwd
+
+modifiedClassesFound=0
+modifiedClasses=""
+
+singleClassToRun=""
+if [[ "$classOption" == "-MC" ]]; then
+	while read -r line ; do
+		echo "Processing $line"
+		if [ "$line" == "List of modified sources:" ]; then
+	  		echo "modified classes to follow"
+	  		modifiedClassesFound=1
+			continue
+		fi
+		if [ "$modifiedClassesFound" -eq "1" ]; then
+			isSeparatingLine "$line" isLine
+			if [ "$isLine" -eq "0" ]; then
+				cleanedLine="${line/- /}"
+				if [[ -z "${modifiedClasses// }" ]]; then
+					singleClassToRun=$cleanedLine
+					modifiedClasses=$cleanedLine
+				else
+					modifiedClasses=$modifiedClasses","$cleanedLine
+				fi
+			else
+				modifiedClassesFound=0
+				echo "Finishing processing modified classes"
+				break
+			fi
+		fi
+	done < <(echo "$info")
+else
+	modifiedClasses="$classOption"
+	singleClassToRun="$classOption"
+fi
+
+echo "Clasess to mutate: "$modifiedClasses
+
+#SEARCH A COMPILED CLASS
+echo "Single class to run: $singleClassToRun"
+if [[ -z "${singleClassToRun// }" ]]; then
+	echo "Contact your java black wizard!"
+	exit 8
+fi
+classAsPath=$(echo $singleClassToRun | sed -r "s/\\./\\//g")".class"
+echo "class as path: $classAsPath"
+fullPathToSingleClass=$(find $checkoutDir -wholename "*$classAsPath" | head -n 1)
+echo "full path single class: $fullPathToSingleClass"
+binDir="${fullPathToSingleClass/$classAsPath}"
+echo "Bin dir: $binDir"
+#======================
+
+if [ "$mutantsOrigin" == "-MJ" ]; then
+	echo "using muJava++ to generate mutants"
+else
+	echo "using external mutants root folder: $mutantsOrigin"
+	echo "you must use a template with the option mutation.basic.useExternalMutants set as true"
+fi
 
 declare -a a="(${modifiedClasses/,/ })";
 for i in ${a[*]}
@@ -230,6 +359,7 @@ do
 	pwd
 	newPropertiesFile="$i""-""${propertiesFile/template-/}"
 	cp $propertiesFile $newPropertiesFile
+	sed -i "s|<MUTFOLDER>|$mutantsOrigin|g" $newPropertiesFile
 	sed -i "s|<SOURCEDIR>|$sourceDir|g" $newPropertiesFile
 	sed -i "s|<BINDIR>|$binDir|g" $newPropertiesFile
 	sed -i "s|<TESTSBINDIR>|$testBinDir|g" $newPropertiesFile
@@ -243,6 +373,9 @@ echo "Running mujava with properties file: $newPropertiesFile"
 mujavaClasspath=$MUJAVA_LIBS:$MUJAVA_JAR:$binDir:$testBinDir:$projectLibDir
 if [[ ! -z "${tests// }" ]]; then
 	mujavaClasspath=$mujavaClasspath:$projectJars
+fi
+if [[ ! -z "${externalJars// }" ]]; then
+	mujavaClasspath=$mujavaClasspath:$externalJars
 fi
 
 $(java -version)
