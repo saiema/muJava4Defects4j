@@ -2,6 +2,7 @@
 
 #$1 : Project (Chart, Lang, etc)
 #$2 : variant number
+#$3 : variant type
 #$3 : mujava++ properties file
 #$4 : -MC (for variant modified class) or fully qualified name of the class to analyze (to use several classes separated by :)
 #$5 : -MJ or mutants folder with the following structure : rootFolder/foldersForEachMutant/fully qualified path ending with a single java file
@@ -45,12 +46,14 @@ echo "MUJAVA LIBS: $MUJAVA_LIBS"
 
 project="$1"
 variant="$2"
-propertiesFile="$3"
-classOption="$4"
-mutantsOrigin="$5"
-externalJarFolder="$6"
-externalCP="$7"
-triggeringTests="$8"
+type="$3"
+propertiesFile="$4"
+classOption="$5"
+mutantsOrigin="$6"
+externalJarFolder="$7"
+externalCP="$8"
+triggeringTests="$9"
+zipPath="${10}"
 
 info=$(defects4j info -p $project -b $variant)
 exitCode="$?"
@@ -216,7 +219,6 @@ elif [[ "$triggeringTests" == "-A" ]]; then
 elif [[ "$triggeringTests" == "-Z" ]]; then
 	#unzip and copy tests to defects4j test source folder
 	#this option will work as calling with -A but will change the original with the provided tests
-	zipPath="$9"	
 	root="${zipPath#.}";root="${zipPath%"$root"}${root%.*}"
 	ext="${zipPath#"$root"}"
 	tarOptions=""	
